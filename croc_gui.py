@@ -130,6 +130,7 @@ class CrocDropApp(tk.Tk):
         self._send_proc          = None
         self._tmp_dir            = None
         self._receiver_connected = False
+        self._room_ready = False
 
         self._sel_file    = tk.StringVar()
         self._secret      = tk.StringVar()
@@ -262,22 +263,28 @@ class CrocDropApp(tk.Tk):
 
         self._rcv_cmd_lbl = tk.Label(rcv_inner, text="croc <your-secret-key>",
                                      font=F_CODE, bg=SURF2, fg=SUCCESS)
-        self._rcv_cmd_lbl.pack(anchor="w", pady=(4,6))
+        self._rcv_cmd_lbl.pack(anchor="w", pady=(4,2))
+
+        # Status: tells user when it's safe to share
+        self._share_status = tk.Label(rcv_inner,
+            text="⚠  Press SEND first — share the code only after status shows READY",
+            font=("Helvetica",8,"bold"), bg=SURF2, fg=WARN)
+        self._share_status.pack(anchor="w", pady=(0,6))
 
         share_row = tk.Frame(rcv_inner, bg=SURF2)
         share_row.pack(fill="x")
 
         self._copy_cmd_btn = self._btn(share_row, "📋 Copy Command", self._copy_cmd,
-                                       bg=SURF3, fg=TEXT, hbg=SURFACE)
+                                       bg=SURF3, fg=MUTED, hbg=SURFACE)
         self._copy_cmd_btn.pack(side="left", ipady=7, ipadx=12)
 
         self._wa_btn = self._btn(share_row, "  WhatsApp", self._share_whatsapp,
-                                 bg=WA_GREEN, fg="white", hbg="#1da851",
+                                 bg="#1a4a2e", fg="#5a8a6a", hbg="#1a4a2e",
                                  font=("Helvetica",10,"bold"))
         self._wa_btn.pack(side="left", padx=(8,0), ipady=7, ipadx=14)
 
         self._tg_btn = self._btn(share_row, "  Telegram", self._share_telegram,
-                                 bg=TG_BLUE, fg="white", hbg="#1a85b8",
+                                 bg="#0d2a3d", fg="#3a6a8a", hbg="#0d2a3d",
                                  font=("Helvetica",10,"bold"))
         self._tg_btn.pack(side="left", padx=(8,0), ipady=7, ipadx=14)
 
@@ -501,15 +508,15 @@ class CrocDropApp(tk.Tk):
 
     # ── Key helpers ───────────────────────────────────────────────────────────
     def _gen_key(self):
-        words = ["swift","amber","delta","neon","croc","nova",
-                 "blaze","lunar","cyber","drop","pixel","echo",
-                 "storm","flash","solar","quark","spike","frost"]
-        key = ("-".join(random.choices(words, k=3)) +
-               "-" + "".join(random.choices(string.digits, k=4)))
+        words = ["swift","amber","delta","neon","nova",
+                 "blaze","lunar","cyber","pixel","echo",
+                 "storm","flash","solar","spike","frost",
+                 "tiger","river","stone","cloud","flame"]
+        # croc expects: number-word-word-word  (e.g. 3-correct-horse-battery)
+        num = random.randint(1, 9)
+        key = f"{num}-" + "-".join(random.choices(words, k=3))
         self._secret.set(key)
-        self._clipboard(key)
-        self._flash(self._copy_key_btn, "✅ Key Copied!")
-        self._log(f"Generated & copied key: {key}", "info")
+        self._log(f"Key set: {key}  — press Send, then share once status shows READY", "info")
 
     def _copy_key(self):
         key = self._secret.get().strip()
@@ -581,10 +588,12 @@ class CrocDropApp(tk.Tk):
                                  "croc is not installed yet.\nWait for the green banner.")
             return
 
-        # Lock the send button
+        # Lock the send button and share buttons until room is ready
         self._send_btn.config(bg=MUTED, text="  Preparing…", cursor="watch")
         self._send_btn.unbind("<Button-1>")
         self._receiver_connected = False
+        self._room_ready = False
+        self._lock_share()
 
         if self._do_compress.get():
             self._prog.config(mode="indeterminate")
@@ -629,6 +638,11 @@ class CrocDropApp(tk.Tk):
         cmd.append(send_path)
 
         self._log(f"$ {' '.join(cmd)}", "dim")
+
+        # If a key was pre-set by user, croc may not echo "Code is:" back.
+        # After 4s (enough time for relay registration), unlock share anyway.
+        if key:
+            self.after(4000, lambda: self._unlock_share(key) if not self._room_ready else None)
 
         def run():
             try:
@@ -716,19 +730,25 @@ class CrocDropApp(tk.Tk):
     def _handle_croc_line(self, line):
         low = line.lower()
 
-        # ── Auto-generated secret code ──
+        # ── croc printed the code = relay room is NOW open, safe to share ──
+        # Matches both: "Code is: X-word-word" and "On the other computer run"
         m = re.search(r'[Cc]ode is[:\s]+(\S+)', line)
         if m:
             code = m.group(1).strip()
             self._secret.set(code)
-            self._clipboard(code)
-            self._log(f"Auto-key: {code}  (copied to clipboard)", "ok")
-            self._flash(self._copy_key_btn, "✅ Key Copied!")
+            self._room_ready = True
+            self._unlock_share(code)
             return
 
+        # Also unlock on "On the other computer" line (croc prints this right after)
+        if "on the other computer" in low or "croc " in low and self._secret.get().strip():
+            if not self._room_ready:
+                self._room_ready = True
+                self._unlock_share(self._secret.get().strip())
+
         # ── Receiver connected ──
-        if any(x in low for x in ["connected","sending","starting","relay"]):
-            if not self._receiver_connected:
+        if any(x in low for x in ["connected","peer","sending","starting"]):
+            if self._room_ready and not self._receiver_connected:
                 self._receiver_connected = True
                 self._send_btn.config(text="  Transferring… 📡")
                 self._prog_lbl.config(text="Receiver connected — sending…")
@@ -744,7 +764,7 @@ class CrocDropApp(tk.Tk):
             self._prog["value"] = val
             self._prog_lbl.config(text=line.strip())
 
-        # Log everything from croc (dim so it doesn't visually dominate)
+        # Log all croc output
         self._log(line, "dim")
 
     def _on_done(self, returncode):
@@ -776,14 +796,56 @@ class CrocDropApp(tk.Tk):
 
         self.after(5000, self._reset_send_btn)
 
+    def _unlock_share(self, code):
+        """Called once croc has registered the room — now safe to share."""
+        self._clipboard(code)
+        self._share_status.config(
+            text="✅  READY — receiver can now run the command below",
+            fg=SUCCESS, bg="#0a2a1a"
+        )
+        self._share_status.master.config(bg="#0a2a1a")  # rcv_inner bg
+        # Activate share buttons
+        for w, bg, hbg in [
+            (self._copy_cmd_btn, "#1e2636", "#252d3d"),
+            (self._wa_btn,       "#25D366", "#1da851"),
+            (self._tg_btn,       "#229ED9", "#1a85b8"),
+        ]:
+            w.config(bg=bg, fg="white", cursor="hand2")
+            w.bind("<Enter>", lambda e, b=hbg, ww=w: ww.config(bg=b))
+            w.bind("<Leave>", lambda e, b=bg,  ww=w: ww.config(bg=b))
+        self._copy_key_btn.config(fg=TEXT)
+        self._clipboard(code)
+        self._flash(self._copy_key_btn, "✅ Key Copied!")
+        self._log(f"✅ READY — room open. Share: croc {code}", "ok")
+        self._prog_lbl.config(text="Relay room open — waiting for receiver…")
+
+    def _lock_share(self):
+        """Reset share buttons to locked/dim state."""
+        self._room_ready = False
+        self._share_status.config(
+            text="⚠  Press SEND first — share the code only after status shows READY",
+            fg=WARN, bg=SURF2
+        )
+        self._share_status.master.config(bg=SURF2)
+        for w, bg, fg in [
+            (self._copy_cmd_btn, "#1e2636", MUTED),
+            (self._wa_btn,       "#1a4a2e", "#5a8a6a"),
+            (self._tg_btn,       "#0d2a3d", "#3a6a8a"),
+        ]:
+            w.config(bg=bg, fg=fg, cursor="arrow")
+            w.unbind("<Enter>")
+            w.unbind("<Leave>")
+
     def _reset_send_btn(self):
         self._send_btn.config(bg=ACCENT, fg="#000",
                               text="  SEND FILE  🚀", cursor="hand2")
         self._send_btn.bind("<Button-1>", lambda e: self._send())
         self._prog_lbl.config(text="")
+        self._lock_share()
 
 
 # ── Entry ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     app = CrocDropApp()
     app.mainloop()
+
