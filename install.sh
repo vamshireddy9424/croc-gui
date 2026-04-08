@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
 #  CrocDrop Installer
-#  One command: curl -fsSL https://your-host/install.sh | bash
+#  One command: curl -fsSL https://raw.githubusercontent.com/vamshireddy9424/croc-gui/main/install.sh | bash
 # ──────────────────────────────────────────────────────────────────────────────
 
 set -e
 
 INSTALL_DIR="$HOME/.local/share/crocdrop"
 BIN_DIR="$HOME/.local/bin"
-SCRIPT_URL="https://raw.githubusercontent.com/YOUR_USER/crocdrop/main/croc_gui.py"
+SCRIPT_URL="https://raw.githubusercontent.com/vamshireddy9424/croc-gui/main/croc_gui.py"
 
 # ── Colours ──
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
