@@ -1,5 +1,5 @@
 # CrocDrop Windows Installer
-# Run with: irm https://your-host/install.ps1 | iex
+# Run with: irm https://raw.githubusercontent.com/vamshireddy9424/croc-gui/main/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 $INSTALL_DIR = "$env:APPDATA\CrocDrop"
@@ -45,14 +45,14 @@ if (-not (Get-Command croc -ErrorAction SilentlyContinue)) {
 New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
 
 # In production, download from your server:
-# Invoke-WebRequest -Uri "https://your-host/croc_gui.py" -OutFile $GUI_SCRIPT
+# Invoke-WebRequest -Uri "https://raw.githubusercontent.com/vamshireddy9424/croc-gui/main/croc_gui.py" -OutFile $GUI_SCRIPT
 # For local bundled install — copy from same dir as this script:
 $srcScript = Join-Path (Split-Path $MyInvocation.MyCommand.Path) "croc_gui.py"
 if (Test-Path $srcScript) {
     Copy-Item $srcScript $GUI_SCRIPT -Force
 } else {
     # Download
-    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/YOUR_USER/crocdrop/main/croc_gui.py" `
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/vamshireddy9424/croc-gui/main/croc_gui.py" `
         -OutFile $GUI_SCRIPT
 }
 
