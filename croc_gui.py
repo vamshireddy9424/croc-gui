@@ -134,6 +134,8 @@ class CrocDropApp(tk.Tk):
         self._sel_file    = tk.StringVar()
         self._secret      = tk.StringVar()
         self._do_compress = tk.BooleanVar(value=False)
+        self._socks5      = tk.StringVar()
+        self._http_proxy  = tk.StringVar()
 
         self._sel_file.trace_add("write", self._on_file_changed)
         self._secret.trace_add("write",   self._update_rcv_cmd)
@@ -278,6 +280,50 @@ class CrocDropApp(tk.Tk):
                                  bg=TG_BLUE, fg="white", hbg="#1a85b8",
                                  font=("Helvetica",10,"bold"))
         self._tg_btn.pack(side="left", padx=(8,0), ipady=7, ipadx=14)
+
+        # ══════════════════════════════════════════════════════════════
+        # 04  PROXY (optional, collapsible)
+        # ══════════════════════════════════════════════════════════════
+        self._proxy_visible = tk.BooleanVar(value=False)
+        proxy_toggle = self._btn(body, "⚙  Proxy settings  ▸", self._toggle_proxy,
+                                 bg=BG, fg=MUTED, hbg=BG,
+                                 font=("Helvetica", 8, "bold"))
+        proxy_toggle.pack(anchor="w", pady=(10, 0))
+        self._proxy_toggle_btn = proxy_toggle
+
+        self._proxy_frame = tk.Frame(body, bg=SURF2)
+        # Not packed yet — shown on toggle
+
+        proxy_inner = tk.Frame(self._proxy_frame, bg=SURF2)
+        proxy_inner.pack(fill="x", padx=14, pady=10)
+
+        # SOCKS5
+        row_s = tk.Frame(proxy_inner, bg=SURF2)
+        row_s.pack(fill="x", pady=(0, 6))
+        tk.Label(row_s, text="SOCKS5 proxy:", font=F_SMALL,
+                 bg=SURF2, fg=MUTED, width=14, anchor="w").pack(side="left")
+        tk.Entry(row_s, textvariable=self._socks5,
+                 font=F_CODE, bg=SURF3, fg=ACCENT,
+                 insertbackground=ACCENT, relief="flat", bd=0,
+                 highlightthickness=1, highlightbackground=MUTED,
+                 highlightcolor=ACCENT, width=32
+                 ).pack(side="left", ipady=6, ipadx=8)
+        tk.Label(row_s, text="  e.g. socks5://127.0.0.1:1080",
+                 font=F_SMALL, bg=SURF2, fg=MUTED).pack(side="left")
+
+        # HTTP proxy
+        row_h = tk.Frame(proxy_inner, bg=SURF2)
+        row_h.pack(fill="x")
+        tk.Label(row_h, text="HTTP proxy:", font=F_SMALL,
+                 bg=SURF2, fg=MUTED, width=14, anchor="w").pack(side="left")
+        tk.Entry(row_h, textvariable=self._http_proxy,
+                 font=F_CODE, bg=SURF3, fg=ACCENT,
+                 insertbackground=ACCENT, relief="flat", bd=0,
+                 highlightthickness=1, highlightbackground=MUTED,
+                 highlightcolor=ACCENT, width=32
+                 ).pack(side="left", ipady=6, ipadx=8)
+        tk.Label(row_h, text="  e.g. http://127.0.0.1:8080",
+                 font=F_SMALL, bg=SURF2, fg=MUTED).pack(side="left")
 
         # ══════════════════════════════════════════════════════════════
         # SEND BUTTON + PROGRESS
@@ -436,6 +482,16 @@ class CrocDropApp(tk.Tk):
         else:
             self._comp_note.config(text="")
 
+    def _toggle_proxy(self):
+        if self._proxy_visible.get():
+            self._proxy_frame.pack_forget()
+            self._proxy_visible.set(False)
+            self._proxy_toggle_btn.config(text="⚙  Proxy settings  ▸")
+        else:
+            self._proxy_frame.pack(fill="x", before=self._send_btn)
+            self._proxy_visible.set(True)
+            self._proxy_toggle_btn.config(text="⚙  Proxy settings  ▾")
+
     def _on_compress_toggle(self):
         if self._do_compress.get():
             self._comp_note.config(
@@ -561,9 +617,16 @@ class CrocDropApp(tk.Tk):
         self._prog_lbl.config(text="Waiting for receiver to connect…")
         self._send_btn.config(text="  Waiting for receiver… 🟡")
 
-        cmd = ["croc", "send", "--yes"]
+        cmd = ["croc", "send"]
         if key:
             cmd += ["--code", key]
+        # Proxy settings (optional)
+        socks5 = self._socks5.get().strip()
+        http_p = self._http_proxy.get().strip()
+        if socks5:
+            cmd += ["--socks5", socks5]
+        if http_p:
+            cmd += ["--connect", http_p]
         cmd.append(send_path)
 
         self._log(f"$ {' '.join(cmd)}", "dim")
