@@ -614,13 +614,12 @@ class CrocDropApp(tk.Tk):
         self._prog.stop()
         self._prog.config(mode="indeterminate")
         self._prog.start(10)
-        self._prog_lbl.config(text="Waiting for receiver to connect…")
-        self._send_btn.config(text="  Waiting for receiver… 🟡")
+        self._prog_lbl.config(text="Waiting for receiver to connect\u2026")
+        self._send_btn.config(text="  Waiting for receiver\u2026 \U0001f7e1")
 
         cmd = ["croc", "send"]
         if key:
             cmd += ["--code", key]
-        # Proxy settings (optional)
         socks5 = self._socks5.get().strip()
         http_p = self._http_proxy.get().strip()
         if socks5:
@@ -631,34 +630,85 @@ class CrocDropApp(tk.Tk):
 
         self._log(f"$ {' '.join(cmd)}", "dim")
 
-        win = platform.system() == "Windows"
-
         def run():
             try:
-                kwargs = dict(
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,   # merge stderr into stdout
-                    text=True,
-                    bufsize=1,
-                )
-                if win:
-                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                IS_WIN = platform.system() == "Windows"
+
+                if IS_WIN:
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True, bufsize=1,
+                    )
+                    self._send_proc = proc
+                    for raw in proc.stdout:
+                        line = raw.rstrip()
+                        if line:
+                            self.after(0, lambda l=line: self._handle_croc_line(l))
+                    proc.wait()
+                    self.after(0, lambda: self._on_done(proc.returncode))
+
                 else:
-                    kwargs["env"] = {**os.environ, "TERM": "dumb"}
+                    # Run croc inside a PTY so it thinks it has a real terminal.
+                    # Without this croc detects "no tty", prints the code, then
+                    # exits immediately instead of waiting for the peer.
+                    import pty, os as _os, select as _sel, errno as _errno
 
-                proc = subprocess.Popen(cmd, **kwargs)
-                self._send_proc = proc
+                    master_fd, slave_fd = pty.openpty()
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+                        close_fds=True,
+                    )
+                    self._send_proc = proc
+                    _os.close(slave_fd)
 
-                for raw_line in proc.stdout:
-                    line = raw_line.rstrip()
-                    if line:
-                        self.after(0, lambda l=line: self._handle_croc_line(l))
+                    buf = b""
+                    while True:
+                        if proc.poll() is not None:
+                            try:
+                                r, _, _ = _sel.select([master_fd], [], [], 0.2)
+                                if r:
+                                    buf += _os.read(master_fd, 4096)
+                            except Exception:
+                                pass
+                            break
+                        try:
+                            rlist, _, _ = _sel.select([master_fd], [], [], 0.1)
+                        except _sel.error:
+                            break
+                        if not rlist:
+                            continue
+                        try:
+                            chunk = _os.read(master_fd, 4096)
+                        except OSError as e:
+                            if e.errno in (_errno.EIO, _errno.EBADF):
+                                break
+                            raise
+                        buf += chunk
+                        while b"\n" in buf or b"\r" in buf:
+                            for sep in (b"\r\n", b"\n", b"\r"):
+                                if sep in buf:
+                                    line_b, buf = buf.split(sep, 1)
+                                    line = re.sub(
+                                        r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b.',
+                                        "", line_b.decode("utf-8", errors="replace")
+                                    ).strip()
+                                    if line:
+                                        self.after(0, lambda l=line: self._handle_croc_line(l))
+                                    break
 
-                proc.wait()
-                self.after(0, lambda: self._on_done(proc.returncode))
+                    try:
+                        _os.close(master_fd)
+                    except Exception:
+                        pass
+                    proc.wait()
+                    self.after(0, lambda: self._on_done(proc.returncode))
 
             except Exception as ex:
-                self.after(0, lambda: self._log(str(ex), "err"))
+                self.after(0, lambda: self._log(f"Launch error: {ex}", "err"))
                 self.after(0, lambda: self._on_done(-99))
 
         threading.Thread(target=run, daemon=True).start()
