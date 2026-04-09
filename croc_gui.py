@@ -653,12 +653,16 @@ class CrocDropApp(tk.Tk):
         if key:
             self.after(30000, lambda: self._unlock_share(key) if not self._room_ready else None)
 
+        # Debug log path — written every run so you can inspect it
+        import datetime
+        debug_log = os.path.expanduser("~/crocdrop_debug.log")
+
         def run():
             try:
-                # Keep stdin as PIPE and never write to it.
-                # This keeps stdin open (no EOF) so croc waits for a peer
-                # without needing a real TTY. Using DEVNULL sends immediate
-                # EOF which can cause croc to exit early on some versions.
+                with open(debug_log, "a") as dbg:
+                    dbg.write(f"\n\n=== {datetime.datetime.now()} ===\n")
+                    dbg.write(f"CMD: {' '.join(cmd_args)}\n")
+
                 proc = subprocess.Popen(
                     cmd_args,
                     stdin=subprocess.PIPE,
@@ -669,6 +673,10 @@ class CrocDropApp(tk.Tk):
                 self._send_proc = proc
 
                 for raw in proc.stdout:
+                    # Write raw line to debug log before any processing
+                    with open(debug_log, "a") as dbg:
+                        dbg.write(f"RAW: {repr(raw)}\n")
+
                     line = re.sub(
                         r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b.',
                         "", raw.replace("\r\n", "\n").replace("\r", "\n")
@@ -679,9 +687,14 @@ class CrocDropApp(tk.Tk):
                             self.after(0, lambda l=part: self._handle_croc_line(l))
 
                 proc.wait()
+                with open(debug_log, "a") as dbg:
+                    dbg.write(f"EXIT CODE: {proc.returncode}\n")
+
                 self.after(0, lambda: self._on_done(proc.returncode))
 
             except Exception as ex:
+                with open(debug_log, "a") as dbg:
+                    dbg.write(f"EXCEPTION: {ex}\n")
                 self.after(0, lambda: self._log(f"Launch error: {ex}", "err"))
                 self.after(0, lambda: self._on_done(-99))
 
@@ -816,3 +829,4 @@ class CrocDropApp(tk.Tk):
 if __name__ == "__main__":
     app = CrocDropApp()
     app.mainloop()
+
