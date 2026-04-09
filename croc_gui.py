@@ -636,9 +636,11 @@ class CrocDropApp(tk.Tk):
         self._prog_lbl.config(text="Waiting for receiver to connect…")
         self._send_btn.config(text="  Waiting for receiver… 🟡")
 
+        # On macOS/Linux, croc v10+ requires the secret as CROC_SECRET env var.
+        # Passing --code as a CLI arg causes croc to exit silently on macOS.
+        IS_WIN = platform.system() == "Windows"
+
         cmd_args = ["croc", "send", "--no-local"]
-        if key:
-            cmd_args += ["--code", key]
         socks5 = self._socks5.get().strip()
         http_p = self._http_proxy.get().strip()
         if socks5:
@@ -647,13 +649,24 @@ class CrocDropApp(tk.Tk):
             cmd_args += ["--connect", http_p]
         cmd_args.append(send_path)
 
-        self._log(f"$ {' '.join(cmd_args)}", "dim")
+        # Pass secret: env var on Unix, --code flag on Windows
+        send_env = os.environ.copy()
+        if key:
+            if IS_WIN:
+                # Windows classic mode still uses --code flag
+                cmd_args.insert(2, key)
+                cmd_args.insert(2, "--code")
+            else:
+                send_env["CROC_SECRET"] = key
 
-        # If key is pre-set, unlock share after 5s (relay registration time)
+        self._log(f"$ {' '.join(cmd_args)}", "dim")
+        if key and not IS_WIN:
+            self._log(f'  env: CROC_SECRET="{key}"', "dim")
+
+        # Unlock share after 30s if croc doesn't echo "Code is:" (pre-set key)
         if key:
             self.after(30000, lambda: self._unlock_share(key) if not self._room_ready else None)
 
-        # Debug log path — written every run so you can inspect it
         import datetime
         debug_log = os.path.expanduser("~/crocdrop_debug.log")
 
@@ -662,6 +675,8 @@ class CrocDropApp(tk.Tk):
                 with open(debug_log, "a") as dbg:
                     dbg.write(f"\n\n=== {datetime.datetime.now()} ===\n")
                     dbg.write(f"CMD: {' '.join(cmd_args)}\n")
+                    if key and not IS_WIN:
+                        dbg.write(f'CROC_SECRET="{key}"\n')
 
                 proc = subprocess.Popen(
                     cmd_args,
@@ -669,6 +684,7 @@ class CrocDropApp(tk.Tk):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True, bufsize=1,
+                    env=send_env,
                 )
                 self._send_proc = proc
 
@@ -829,4 +845,3 @@ class CrocDropApp(tk.Tk):
 if __name__ == "__main__":
     app = CrocDropApp()
     app.mainloop()
-
