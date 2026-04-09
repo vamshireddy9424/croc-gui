@@ -529,7 +529,13 @@ class CrocDropApp(tk.Tk):
 
     def _update_rcv_cmd(self, *_):
         k = self._secret.get().strip()
-        self._rcv_cmd_lbl.config(text=f"croc {k}" if k else "croc <your-secret-key>")
+        if k:
+            # On Linux/macOS croc expects the secret as env var to avoid
+            # leaking it in process list. This is the correct receive command.
+            cmd = f'CROC_SECRET="{k}" croc'
+        else:
+            cmd = 'CROC_SECRET="<your-secret-key>" croc'
+        self._rcv_cmd_lbl.config(text=cmd)
 
     # ── Share helpers ─────────────────────────────────────────────────────────
     def _build_share_msg(self):
@@ -545,7 +551,7 @@ class CrocDropApp(tk.Tk):
                 f"  Linux/Mac:  curl https://getcroc.schollz.com | bash\n"
                 f"  Windows:    winget install schollz.croc\n\n"
                 f"Step 2 — In your terminal, run:\n\n"
-                f"  croc {key}\n\n"
+                f'  CROC_SECRET="{key}" croc\n\n'
                 f"⚠ Only run this AFTER the sender says they are ready!\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🔒 End-to-end encrypted transfer via croc.")
@@ -571,9 +577,10 @@ class CrocDropApp(tk.Tk):
         if not k:
             messagebox.showwarning("No key", "Generate a key first.")
             return
-        self._clipboard(f"croc {k}")
+        cmd = f'CROC_SECRET="{k}" croc'
+        self._clipboard(cmd)
         self._flash(self._copy_cmd_btn, "✅ Copied!")
-        self._log(f"Copied receiver command: croc {k}", "ok")
+        self._log(f"Copied receiver command: {cmd}", "ok")
 
     # ── SEND ──────────────────────────────────────────────────────────────────
     def _send(self):
@@ -629,7 +636,7 @@ class CrocDropApp(tk.Tk):
         self._prog_lbl.config(text="Waiting for receiver to connect…")
         self._send_btn.config(text="  Waiting for receiver… 🟡")
 
-        cmd_args = ["croc", "send"]
+        cmd_args = ["croc", "send", "--no-local"]
         if key:
             cmd_args += ["--code", key]
         socks5 = self._socks5.get().strip()
@@ -648,47 +655,24 @@ class CrocDropApp(tk.Tk):
 
         def run():
             try:
-                IS_WIN = platform.system() == "Windows"
-                IS_MAC = platform.system() == "Darwin"
-
-                if IS_WIN:
-                    # Windows: plain Popen — croc on Windows doesn't require a TTY
-                    proc = subprocess.Popen(
-                        cmd_args,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True, bufsize=1,
-                    )
-                else:
-                    # Linux/macOS: wrap croc in `script` so it gets a real PTY.
-                    # Without a PTY croc detects non-interactive mode and may
-                    # exit after printing the code instead of waiting for peer.
-                    # `script -q -f -c CMD /dev/null` runs CMD in a PTY and
-                    # flushes output line-by-line to our stdout pipe.
-                    import shlex
-                    inner = shlex.join(cmd_args)
-                    if IS_MAC:
-                        # macOS script syntax differs
-                        wrap = ["script", "-q", "/dev/null"] + cmd_args
-                    else:
-                        # Linux: -f = flush, -c = command, /dev/null = typescript sink
-                        wrap = ["script", "-q", "-f", "-c", inner, "/dev/null"]
-
-                    proc = subprocess.Popen(
-                        wrap,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True, bufsize=1,
-                    )
-
+                # Keep stdin as PIPE and never write to it.
+                # This keeps stdin open (no EOF) so croc waits for a peer
+                # without needing a real TTY. Using DEVNULL sends immediate
+                # EOF which can cause croc to exit early on some versions.
+                proc = subprocess.Popen(
+                    cmd_args,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
+                )
                 self._send_proc = proc
 
                 for raw in proc.stdout:
-                    # Strip carriage returns and ANSI codes left by script/PTY
-                    line = re.sub(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b.', "",
-                                  raw.replace("\r\n", "\n").replace("\r", "\n"))
+                    line = re.sub(
+                        r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b.',
+                        "", raw.replace("\r\n", "\n").replace("\r", "\n")
+                    )
                     for part in line.split("\n"):
                         part = part.strip()
                         if part:
@@ -800,7 +784,7 @@ class CrocDropApp(tk.Tk):
         self._copy_key_btn.config(fg=TEXT)
         self._clipboard(code)
         self._flash(self._copy_key_btn, "✅ Key Copied!")
-        self._log(f"✅ READY — room open. Share: croc {code}", "ok")
+        self._log(f'✅ READY — share: CROC_SECRET="{code}" croc', "ok")
         self._prog_lbl.config(text="Relay room open — waiting for receiver…")
 
     def _lock_share(self):
