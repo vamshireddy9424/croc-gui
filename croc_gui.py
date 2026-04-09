@@ -539,13 +539,16 @@ class CrocDropApp(tk.Tk):
         fname = (os.path.basename(self._sel_file.get().strip())
                  if self._sel_file.get().strip() else "a file")
         return (f"📦 CrocDrop File Transfer\n\n"
-                f"Sending you: {fname}\n\n"
+                f"Someone is sending you: {fname}\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"Step 1 — Install croc (one-time):\n"
                 f"  Linux/Mac:  curl https://getcroc.schollz.com | bash\n"
                 f"  Windows:    winget install schollz.croc\n\n"
-                f"Step 2 — Receive the file:\n"
+                f"Step 2 — In your terminal, run:\n\n"
                 f"  croc {key}\n\n"
-                f"🔒 End-to-end encrypted.")
+                f"⚠ Only run this AFTER the sender says they are ready!\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🔒 End-to-end encrypted transfer via croc.")
 
     def _share_whatsapp(self):
         msg = self._build_share_msg()
@@ -623,103 +626,76 @@ class CrocDropApp(tk.Tk):
         self._prog.stop()
         self._prog.config(mode="indeterminate")
         self._prog.start(10)
-        self._prog_lbl.config(text="Waiting for receiver to connect\u2026")
-        self._send_btn.config(text="  Waiting for receiver\u2026 \U0001f7e1")
+        self._prog_lbl.config(text="Waiting for receiver to connect…")
+        self._send_btn.config(text="  Waiting for receiver… 🟡")
 
-        cmd = ["croc", "send"]
+        cmd_args = ["croc", "send"]
         if key:
-            cmd += ["--code", key]
+            cmd_args += ["--code", key]
         socks5 = self._socks5.get().strip()
         http_p = self._http_proxy.get().strip()
         if socks5:
-            cmd += ["--socks5", socks5]
+            cmd_args += ["--socks5", socks5]
         if http_p:
-            cmd += ["--connect", http_p]
-        cmd.append(send_path)
+            cmd_args += ["--connect", http_p]
+        cmd_args.append(send_path)
 
-        self._log(f"$ {' '.join(cmd)}", "dim")
+        self._log(f"$ {' '.join(cmd_args)}", "dim")
 
-        # If a key was pre-set by user, croc may not echo "Code is:" back.
-        # After 4s (enough time for relay registration), unlock share anyway.
+        # If key is pre-set, unlock share after 5s (relay registration time)
         if key:
-            self.after(4000, lambda: self._unlock_share(key) if not self._room_ready else None)
+            self.after(30000, lambda: self._unlock_share(key) if not self._room_ready else None)
 
         def run():
             try:
                 IS_WIN = platform.system() == "Windows"
+                IS_MAC = platform.system() == "Darwin"
 
                 if IS_WIN:
+                    # Windows: plain Popen — croc on Windows doesn't require a TTY
                     proc = subprocess.Popen(
-                        cmd,
+                        cmd_args,
                         stdin=subprocess.DEVNULL,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         text=True, bufsize=1,
                     )
-                    self._send_proc = proc
-                    for raw in proc.stdout:
-                        line = raw.rstrip()
-                        if line:
-                            self.after(0, lambda l=line: self._handle_croc_line(l))
-                    proc.wait()
-                    self.after(0, lambda: self._on_done(proc.returncode))
-
                 else:
-                    # Run croc inside a PTY so it thinks it has a real terminal.
-                    # Without this croc detects "no tty", prints the code, then
-                    # exits immediately instead of waiting for the peer.
-                    import pty, os as _os, select as _sel, errno as _errno
+                    # Linux/macOS: wrap croc in `script` so it gets a real PTY.
+                    # Without a PTY croc detects non-interactive mode and may
+                    # exit after printing the code instead of waiting for peer.
+                    # `script -q -f -c CMD /dev/null` runs CMD in a PTY and
+                    # flushes output line-by-line to our stdout pipe.
+                    import shlex
+                    inner = shlex.join(cmd_args)
+                    if IS_MAC:
+                        # macOS script syntax differs
+                        wrap = ["script", "-q", "/dev/null"] + cmd_args
+                    else:
+                        # Linux: -f = flush, -c = command, /dev/null = typescript sink
+                        wrap = ["script", "-q", "-f", "-c", inner, "/dev/null"]
 
-                    master_fd, slave_fd = pty.openpty()
                     proc = subprocess.Popen(
-                        cmd,
-                        stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
-                        close_fds=True,
+                        wrap,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True, bufsize=1,
                     )
-                    self._send_proc = proc
-                    _os.close(slave_fd)
 
-                    buf = b""
-                    while True:
-                        if proc.poll() is not None:
-                            try:
-                                r, _, _ = _sel.select([master_fd], [], [], 0.2)
-                                if r:
-                                    buf += _os.read(master_fd, 4096)
-                            except Exception:
-                                pass
-                            break
-                        try:
-                            rlist, _, _ = _sel.select([master_fd], [], [], 0.1)
-                        except _sel.error:
-                            break
-                        if not rlist:
-                            continue
-                        try:
-                            chunk = _os.read(master_fd, 4096)
-                        except OSError as e:
-                            if e.errno in (_errno.EIO, _errno.EBADF):
-                                break
-                            raise
-                        buf += chunk
-                        while b"\n" in buf or b"\r" in buf:
-                            for sep in (b"\r\n", b"\n", b"\r"):
-                                if sep in buf:
-                                    line_b, buf = buf.split(sep, 1)
-                                    line = re.sub(
-                                        r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b.',
-                                        "", line_b.decode("utf-8", errors="replace")
-                                    ).strip()
-                                    if line:
-                                        self.after(0, lambda l=line: self._handle_croc_line(l))
-                                    break
+                self._send_proc = proc
 
-                    try:
-                        _os.close(master_fd)
-                    except Exception:
-                        pass
-                    proc.wait()
-                    self.after(0, lambda: self._on_done(proc.returncode))
+                for raw in proc.stdout:
+                    # Strip carriage returns and ANSI codes left by script/PTY
+                    line = re.sub(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b.', "",
+                                  raw.replace("\r\n", "\n").replace("\r", "\n"))
+                    for part in line.split("\n"):
+                        part = part.strip()
+                        if part:
+                            self.after(0, lambda l=part: self._handle_croc_line(l))
+
+                proc.wait()
+                self.after(0, lambda: self._on_done(proc.returncode))
 
             except Exception as ex:
                 self.after(0, lambda: self._log(f"Launch error: {ex}", "err"))
@@ -764,8 +740,16 @@ class CrocDropApp(tk.Tk):
             self._prog["value"] = val
             self._prog_lbl.config(text=line.strip())
 
-        # Log all croc output
-        self._log(line, "dim")
+        # Filter noisy/sensitive lines before logging
+        skip_patterns = [
+            "croc_secret",          # never show secret in log
+            "croc send ",           # croc echoes its own command — redundant
+            "on the other computer",# shown in UI already
+            "classic mode",         # implementation detail, not useful
+        ]
+        if not any(p in low for p in skip_patterns):
+            tag = "warn" if "error" in low or "fail" in low else "dim"
+            self._log(line, tag)
 
     def _on_done(self, returncode):
         self._prog.stop()
@@ -848,4 +832,3 @@ class CrocDropApp(tk.Tk):
 if __name__ == "__main__":
     app = CrocDropApp()
     app.mainloop()
-
